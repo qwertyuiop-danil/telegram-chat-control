@@ -1,0 +1,13 @@
+# Local Telegram data and credentials
+data/
+*.sqlite3
+*.session
+*.session-journal
+telegram-login-qr.png
+
+# Local secrets and runtime files
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.DS_Store
