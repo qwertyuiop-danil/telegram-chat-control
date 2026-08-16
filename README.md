@@ -1,7 +1,7 @@
 # telegram-chat-control
 
-Codex skill for working with Telegram through a local SQLite index and Telethon.
+Скилл Codex для работы с Telegram через локальный SQLite-индекс и Telethon.
 
-The skill keeps Telegram sessions and local chat data outside the repository. Configure Telegram API credentials in the macOS Keychain; never commit credentials, sessions, databases, chat exports, or media.
+Скилл хранит Telegram-сессии и локальные данные чатов вне репозитория. Настройте учётные данные Telegram API в macOS Keychain. Никогда не добавляйте в GitHub ключи, сессии, базы данных, выгрузки переписок или медиафайлы.
 
-See [`SKILL.md`](SKILL.md) for the full usage guide.
+Полная инструкция по установке и использованию находится в [`SKILL.md`](SKILL.md).
