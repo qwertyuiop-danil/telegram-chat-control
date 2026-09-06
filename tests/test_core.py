@@ -13,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from telegram_control import accounts, cli, client
+from telegram_control import credentials as credentials_module
 from telegram_control.credentials import Credentials
 from telegram_control.services import launchd_plist, systemd_unit
 from telegram_control.store import Store, decode_cursor
@@ -179,6 +180,10 @@ class PlatformTests(unittest.TestCase):
     def test_telethon_proxy_comes_from_explicit_environment(self) -> None:
         with patch.dict(os.environ, {"TELEGRAM_CHAT_CONTROL_PROXY": "http://127.0.0.1:10811"}, clear=True):
             self.assertEqual(client.telegram_proxy(), {"proxy_type": "http", "addr": "127.0.0.1", "port": 10811, "rdns": True})
+
+    def test_headless_linux_uses_private_credential_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(credentials_module.platform, "system", return_value="Linux"), patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(Credentials(Path(directory)).backend(), "private-file")
 
     def test_service_definitions_are_user_scoped_and_restartable(self) -> None:
         self.assertIn("LaunchAgents", str(Path.home() / "Library" / "LaunchAgents"))

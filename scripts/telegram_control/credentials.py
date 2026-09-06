@@ -35,6 +35,12 @@ class Credentials:
     def _load_keyring(self) -> Any | None:
         if not self._keyring_checked:
             self._keyring_checked = True
+            # A lingering systemd user service and a non-interactive SSH shell
+            # do not have a session D-Bus. Secret Service can block while
+            # trying to discover one, so use the documented private fallback.
+            if platform.system() == "Linux" and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+                self._keyring = None
+                return None
             try:
                 import keyring  # type: ignore[import-not-found]
 
