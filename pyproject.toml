@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
   "filelock>=3.16,<4",
   "keyring>=25,<26",
+  "python-socks[asyncio]>=2.6,<3",
   "qrcode[pil]>=8,<9",
   "telethon>=1.42,<2",
 ]

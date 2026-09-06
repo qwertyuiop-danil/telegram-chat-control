@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["telethon>=1.42,<2", "qrcode[pil]>=8,<9", "filelock>=3.16,<4", "keyring>=25,<26"]
+# dependencies = ["telethon>=1.42,<2", "qrcode[pil]>=8,<9", "filelock>=3.16,<4", "keyring>=25,<26", "python-socks[asyncio]>=2.6,<3"]
 # ///
 """Entry point for the cross-platform Telegram chat-control skill.
 

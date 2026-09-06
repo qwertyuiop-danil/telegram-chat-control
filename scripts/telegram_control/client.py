@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import urlparse
 import webbrowser
 
 from filelock import FileLock, Timeout
@@ -51,6 +53,28 @@ def store(root: Path, account_id: str | None = None) -> Store:
     return Store(root, account_id or active_account(root)["id"])
 
 
+def telegram_proxy() -> dict[str, Any] | None:
+    """Return explicit Telethon proxy settings, if configured by the host."""
+    raw = os.environ.get("TELEGRAM_CHAT_CONTROL_PROXY")
+    if not raw:
+        return None
+    parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+    if parsed.scheme not in {"http", "https", "socks5"} or not parsed.hostname:
+        raise CredentialError("TELEGRAM_CHAT_CONTROL_PROXY must be an http://, https://, or socks5:// URL.")
+    defaults = {"http": 80, "https": 443, "socks5": 1080}
+    proxy: dict[str, Any] = {
+        "proxy_type": "http" if parsed.scheme == "https" else parsed.scheme,
+        "addr": parsed.hostname,
+        "port": parsed.port or defaults[parsed.scheme],
+        "rdns": True,
+    }
+    if parsed.username:
+        proxy["username"] = parsed.username
+    if parsed.password:
+        proxy["password"] = parsed.password
+    return proxy
+
+
 def telegram_client(root: Path, account_id: str | None = None) -> Any:
     load_telethon()
     account_id = account_id or active_account(root)["id"]
@@ -59,7 +83,7 @@ def telegram_client(root: Path, account_id: str | None = None) -> Any:
     api_id = int(credentials.require(API_ID, "Telegram API ID"))
     api_hash = credentials.require(API_HASH, "Telegram API hash")
     session = credentials.require(session_key(account_id), "Telegram session")
-    return TelegramClient(StringSession(session), api_id, api_hash, sequential_updates=True, catch_up=True)
+    return TelegramClient(StringSession(session), api_id, api_hash, proxy=telegram_proxy(), sequential_updates=True, catch_up=True)
 
 
 async def assert_owner(root: Path, current: Any) -> None:
@@ -423,7 +447,7 @@ async def login_qr(root: Path, *, api_id: str | None = None, api_hash: str | Non
     hash_value = credentials.require(API_HASH, "Telegram API hash")
     root.mkdir(parents=True, exist_ok=True)
     qr_path = root / "telegram-login-qr.png"
-    current = TelegramClient(StringSession(), numeric_api_id, hash_value)
+    current = TelegramClient(StringSession(), numeric_api_id, hash_value, proxy=telegram_proxy())
     try:
         await current.connect()
         qr_login = await current.qr_login()

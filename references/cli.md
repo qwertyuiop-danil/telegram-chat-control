@@ -47,6 +47,8 @@ uv run scripts/telegram.py service status
 
 `service install` создаёт пользовательский LaunchAgent на macOS, user-service systemd на Linux или Task Scheduler на Windows. Он синхронизирует только активный аккаунт.
 
+Если сеть требует прокси именно для MTProto, задай `TELEGRAM_CHAT_CONTROL_PROXY` как `http://HOST:PORT` или `socks5://HOST:PORT` в окружении сервиса. Обычные `HTTP_PROXY` и `HTTPS_PROXY` Telethon не использует автоматически.
+
 ## Подключение и отправка
 
 ```bash
