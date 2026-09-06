@@ -1,4 +1,4 @@
 interface:
   display_name: "Управление чатами Telegram"
-  short_description: "Быстрое локальное чтение и безопасная отправка Telegram"
-  default_prompt: "Используй $telegram-chat-control, чтобы найти сообщения в моих чатах Telegram или подготовить сообщение для разрешённого получателя."
+  short_description: "Локальный поиск Telegram с ясным направлением сообщений"
+  default_prompt: "Используй $telegram-chat-control, чтобы найти нужный чат и кратко прочитать сообщения с явными отправителями и направлением."
