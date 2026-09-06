@@ -194,6 +194,8 @@ async def run_daemon(root: Path) -> None:
         try:
             await current.connect()
             await current.catch_up()
+            with store(root, account_id).connect() as db:
+                Store.set_state(db, "heartbeat", {"at": now(), "account_id": account_id, "pid": os.getpid(), "phase": "connected"})
             last_audit = 0.0
             while accounts.active(root)["id"] == account_id:
                 current_time = asyncio.get_running_loop().time()
@@ -203,7 +205,7 @@ async def run_daemon(root: Path) -> None:
                         await reconcile_deletions(root, current=current)
                         last_audit = current_time
                     with store(root, account_id).connect() as db:
-                        Store.set_state(db, "heartbeat", {"at": now(), "account_id": account_id, "pid": os.getpid()})
+                        Store.set_state(db, "heartbeat", {"at": now(), "account_id": account_id, "pid": os.getpid(), "phase": "synced"})
                 await asyncio.sleep(5)
         finally:
             await current.disconnect()

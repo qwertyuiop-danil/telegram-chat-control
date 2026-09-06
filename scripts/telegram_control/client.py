@@ -231,12 +231,31 @@ async def _sync_index(root: Path, current: Any, owner_id: int, *, full: bool, di
             newest = cursor
             if full or getattr(dialog.message, "id", 0) > cursor:
                 history_requests += 1
-                async for message in current.iter_messages(dialog.entity, min_id=cursor, reverse=True):
-                    await _ingest_message(root, db, peer_id, message, owner_id)
-                    newest = max(newest, message.id)
-                    messages += 1
-                    if messages % 100 == 0:
-                        db.commit()
+                if full or cursor:
+                    received = current.iter_messages(
+                        dialog.entity,
+                        min_id=cursor,
+                        reverse=True,
+                        limit=None if full else 200,
+                    )
+                    async for message in received:
+                        await _ingest_message(root, db, peer_id, message, owner_id)
+                        newest = max(newest, message.id)
+                        messages += 1
+                        if messages % 100 == 0:
+                            db.commit()
+                else:
+                    # A new dialog is not an instruction to download its whole
+                    # history. Keep the normal five-second cycle bounded; an
+                    # explicit `sync run --full` is available for history.
+                    received = [message async for message in current.iter_messages(dialog.entity, limit=200)]
+                    received.reverse()
+                    for message in received:
+                        await _ingest_message(root, db, peer_id, message, owner_id)
+                        newest = max(newest, message.id)
+                        messages += 1
+                        if messages % 100 == 0:
+                            db.commit()
             Store.set_cursor(db, peer_id, newest)
             db.commit()
             chats += 1
