@@ -19,7 +19,13 @@ from .services import run_daemon, start as start_service, status as service_stat
 from .store import Store, decode_cursor, encode_cursor, now, row_dicts
 
 
-ROOT = Path(os.environ.get("TELEGRAM_CHAT_CONTROL_HOME", Path.home() / ".codex" / "telegram-chat-control"))
+def default_root() -> Path:
+    """Prefer the shared OpenClaw runtime when this skill is installed there."""
+    openclaw = Path.home() / ".openclaw" / "telegram-chat-control"
+    return openclaw if openclaw.exists() else Path.home() / ".codex" / "telegram-chat-control"
+
+
+ROOT = Path(os.environ.get("TELEGRAM_CHAT_CONTROL_HOME", default_root()))
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
 
