@@ -38,7 +38,8 @@ class Credentials:
             # A lingering systemd user service and a non-interactive SSH shell
             # do not have a session D-Bus. Secret Service can block while
             # trying to discover one, so use the documented private fallback.
-            if platform.system() == "Linux" and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+            headless_openclaw = self.root.parent.name == ".openclaw"
+            if platform.system() == "Linux" and (headless_openclaw or not os.environ.get("DBUS_SESSION_BUS_ADDRESS")):
                 self._keyring = None
                 return None
             try:

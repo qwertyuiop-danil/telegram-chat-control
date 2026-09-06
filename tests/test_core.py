@@ -184,6 +184,8 @@ class PlatformTests(unittest.TestCase):
     def test_headless_linux_uses_private_credential_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(credentials_module.platform, "system", return_value="Linux"), patch.dict(os.environ, {}, clear=True):
             self.assertEqual(Credentials(Path(directory)).backend(), "private-file")
+        with tempfile.TemporaryDirectory() as directory, patch.object(credentials_module.platform, "system", return_value="Linux"), patch.dict(os.environ, {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1/bus"}, clear=True):
+            self.assertEqual(Credentials(Path(directory) / ".openclaw" / "telegram-chat-control").backend(), "private-file")
 
     def test_service_definitions_are_user_scoped_and_restartable(self) -> None:
         self.assertIn("LaunchAgents", str(Path.home() / "Library" / "LaunchAgents"))
