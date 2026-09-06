@@ -196,16 +196,16 @@ async def run_daemon(root: Path) -> None:
             await current.catch_up()
             with store(root, account_id).connect() as db:
                 Store.set_state(db, "heartbeat", {"at": now(), "account_id": account_id, "pid": os.getpid(), "phase": "connected"})
-            last_audit = 0.0
+            last_audit = asyncio.get_running_loop().time()
             while accounts.active(root)["id"] == account_id:
                 current_time = asyncio.get_running_loop().time()
                 async with index_lock:
                     await sync_index(root, current=current, dialog_limit=100)
+                    with store(root, account_id).connect() as db:
+                        Store.set_state(db, "heartbeat", {"at": now(), "account_id": account_id, "pid": os.getpid(), "phase": "synced"})
                     if current_time - last_audit >= 300:
                         await reconcile_deletions(root, current=current)
                         last_audit = current_time
-                    with store(root, account_id).connect() as db:
-                        Store.set_state(db, "heartbeat", {"at": now(), "account_id": account_id, "pid": os.getpid(), "phase": "synced"})
                 await asyncio.sleep(5)
         finally:
             await current.disconnect()
