@@ -28,7 +28,10 @@ WINDOWS_TASK = "Codex Telegram Chat Control"
 def entry_command() -> list[str]:
     """Use the current interpreter, which `uv run` has already prepared."""
     entrypoint = Path(__file__).resolve().parents[1] / "telegram.py"
-    return [sys.executable, str(entrypoint), "service", "run"]
+    command = [sys.executable]
+    if platform.system() == "Darwin":
+        command.append("-S")
+    return command + [str(entrypoint), "service", "run"]
 
 
 def _quoted_command() -> str:
@@ -47,9 +50,12 @@ def systemd_path() -> Path:
 def launchd_plist() -> str:
     arguments = "".join(f"<string>{part}</string>" for part in entry_command())
     backend = os.environ.get("PYTHON_KEYRING_BACKEND")
+    venv_root = Path(sys.executable).parent.parent
+    site_packages = venv_root / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
     environment = (
         "<key>EnvironmentVariables</key><dict>"
         f"<key>HOME</key><string>{escape(str(Path.home()))}</string>"
+        f"<key>PYTHONPATH</key><string>{escape(str(site_packages))}</string>"
         + (f"<key>PYTHON_KEYRING_BACKEND</key><string>{escape(backend)}</string>" if backend else "")
         + "</dict>"
     )

@@ -200,6 +200,8 @@ class PlatformTests(unittest.TestCase):
         self.assertIn("EnvironmentVariables", plist)
         self.assertIn("keyring.backends.fail.Keyring", plist)
         self.assertIn("WorkingDirectory", plist)
+        self.assertIn("PYTHONPATH", plist)
+        self.assertIn("<string>-S</string>", plist)
 
     def test_private_file_credential_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
