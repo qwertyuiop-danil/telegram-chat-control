@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -48,7 +49,11 @@ def systemd_path() -> Path:
 
 
 def launchd_plist() -> str:
-    arguments = "".join(f"<string>{part}</string>" for part in entry_command())
+    command = "exec " + " ".join(shlex.quote(part) for part in entry_command())
+    arguments = "".join(
+        f"<string>{escape(part)}</string>"
+        for part in ("/bin/zsh", "-lc", command)
+    )
     backend = os.environ.get("PYTHON_KEYRING_BACKEND")
     venv_root = Path(sys.executable).parent.parent
     site_packages = venv_root / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
