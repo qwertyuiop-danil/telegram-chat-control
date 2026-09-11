@@ -47,18 +47,19 @@ def systemd_path() -> Path:
 def launchd_plist() -> str:
     arguments = "".join(f"<string>{part}</string>" for part in entry_command())
     backend = os.environ.get("PYTHON_KEYRING_BACKEND")
-    environment = ""
-    if backend:
-        environment = (
-            "<key>EnvironmentVariables</key><dict>"
-            f"<key>PYTHON_KEYRING_BACKEND</key><string>{escape(backend)}</string>"
-            "</dict>"
-        )
+    environment = (
+        "<key>EnvironmentVariables</key><dict>"
+        f"<key>HOME</key><string>{escape(str(Path.home()))}</string>"
+        + (f"<key>PYTHON_KEYRING_BACKEND</key><string>{escape(backend)}</string>" if backend else "")
+        + "</dict>"
+    )
+    working_directory = escape(str(Path(__file__).resolve().parents[2]))
     return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\"><dict>
   <key>Label</key><string>{LABEL}</string>
   <key>ProgramArguments</key><array>{arguments}</array>
+  <key>WorkingDirectory</key><string>{working_directory}</string>
   {environment}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
