@@ -98,7 +98,9 @@ class Credentials:
         backend = self._load_keyring()
         if backend:
             try:
-                return backend.get_password(SERVICE, key)
+                value = backend.get_password(SERVICE, key)
+                if value:
+                    return value
             except Exception:
                 self._keyring = None
         return self._read_file().get(key)

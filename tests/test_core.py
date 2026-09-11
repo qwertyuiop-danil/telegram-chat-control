@@ -204,6 +204,20 @@ class PlatformTests(unittest.TestCase):
             if os.name != "nt":
                 self.assertEqual(oct(credentials.path.stat().st_mode & 0o777), "0o600")
 
+    def test_empty_keyring_falls_back_to_imported_private_file(self) -> None:
+        class EmptyKeyring:
+            @staticmethod
+            def get_password(service: str, key: str) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            credentials = Credentials(Path(directory))
+            credentials._keyring_checked = True
+            credentials._keyring = None
+            credentials.put("test", "secret")
+            credentials._keyring = EmptyKeyring()
+            self.assertEqual(credentials.get("test"), "secret")
+
 
 if __name__ == "__main__":
     unittest.main()
