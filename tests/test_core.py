@@ -194,6 +194,12 @@ class PlatformTests(unittest.TestCase):
         self.assertIn("Restart=always", unit)
         self.assertIn("service run", unit)
 
+    def test_launchd_preserves_explicit_keyring_backend(self) -> None:
+        with patch.dict(os.environ, {"PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}):
+            plist = launchd_plist()
+        self.assertIn("EnvironmentVariables", plist)
+        self.assertIn("keyring.backends.fail.Keyring", plist)
+
     def test_private_file_credential_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             credentials = Credentials(Path(directory))

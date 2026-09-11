@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from typing import Any
+from xml.sax.saxutils import escape
 
 from . import accounts
 from .client import handle_deleted, ingest_event, load_telethon, reconcile_deletions, store, sync_index, telegram_client
@@ -45,11 +46,20 @@ def systemd_path() -> Path:
 
 def launchd_plist() -> str:
     arguments = "".join(f"<string>{part}</string>" for part in entry_command())
+    backend = os.environ.get("PYTHON_KEYRING_BACKEND")
+    environment = ""
+    if backend:
+        environment = (
+            "<key>EnvironmentVariables</key><dict>"
+            f"<key>PYTHON_KEYRING_BACKEND</key><string>{escape(backend)}</string>"
+            "</dict>"
+        )
     return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\"><dict>
   <key>Label</key><string>{LABEL}</string>
   <key>ProgramArguments</key><array>{arguments}</array>
+  {environment}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
 </dict></plist>
