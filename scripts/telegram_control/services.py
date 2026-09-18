@@ -8,12 +8,10 @@ import json
 import os
 from pathlib import Path
 import platform
-import shlex
 import shutil
 import subprocess
 import sys
 from typing import Any
-from xml.sax.saxutils import escape
 
 from . import accounts
 from .client import handle_deleted, ingest_event, load_telethon, reconcile_deletions, store, sync_index, telegram_client
@@ -29,10 +27,7 @@ WINDOWS_TASK = "Codex Telegram Chat Control"
 def entry_command() -> list[str]:
     """Use the current interpreter, which `uv run` has already prepared."""
     entrypoint = Path(__file__).resolve().parents[1] / "telegram.py"
-    command = [sys.executable]
-    if platform.system() == "Darwin":
-        command.append("-S")
-    return command + [str(entrypoint), "service", "run"]
+    return [sys.executable, str(entrypoint), "service", "run"]
 
 
 def _quoted_command() -> str:
@@ -49,29 +44,12 @@ def systemd_path() -> Path:
 
 
 def launchd_plist() -> str:
-    command = "exec " + " ".join(shlex.quote(part) for part in entry_command())
-    arguments = "".join(
-        f"<string>{escape(part)}</string>"
-        for part in ("/bin/zsh", "-lc", command)
-    )
-    backend = os.environ.get("PYTHON_KEYRING_BACKEND")
-    venv_root = Path(sys.executable).parent.parent
-    site_packages = venv_root / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-    environment = (
-        "<key>EnvironmentVariables</key><dict>"
-        f"<key>HOME</key><string>{escape(str(Path.home()))}</string>"
-        f"<key>PYTHONPATH</key><string>{escape(str(site_packages))}</string>"
-        + (f"<key>PYTHON_KEYRING_BACKEND</key><string>{escape(backend)}</string>" if backend else "")
-        + "</dict>"
-    )
-    working_directory = escape(str(Path(__file__).resolve().parents[2]))
+    arguments = "".join(f"<string>{part}</string>" for part in entry_command())
     return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\"><dict>
   <key>Label</key><string>{LABEL}</string>
   <key>ProgramArguments</key><array>{arguments}</array>
-  <key>WorkingDirectory</key><string>{working_directory}</string>
-  {environment}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
 </dict></plist>

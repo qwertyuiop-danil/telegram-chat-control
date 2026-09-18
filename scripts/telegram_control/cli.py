@@ -13,7 +13,7 @@ import sys
 from typing import Any, Callable
 
 from . import accounts
-from .client import CredentialError, RPCError, allowed_list, download_photo, login_qr, profile, reconcile_deletions, send, set_allowed, store, sync_index, transcribe
+from .client import CredentialError, RPCError, allowed_list, download_photo, login_qr, open_chat, profile, reconcile_deletions, send, set_allowed, store, sync_index, transcribe
 from .services import install as install_service
 from .services import run_daemon, start as start_service, status as service_status, stop as stop_service, uninstall as uninstall_service
 from .store import Store, decode_cursor, encode_cursor, now, row_dicts
@@ -295,9 +295,22 @@ def _message_conditions(args: argparse.Namespace, period: dict[str, Any] | None)
         selected_chats.append("p.kind IN ('personal','bot')")
     if selected_chats:
         where.append("(" + " OR ".join(selected_chats) + ")")
-    if getattr(args, "sender", None) is not None:
-        where.append("m.sender_id=?")
-        values.append(args.sender)
+    senders = getattr(args, "sender", None)
+    if senders is not None:
+        senders = senders if isinstance(senders, list) else [senders]
+        sender_conditions = []
+        for sender in senders:
+            if str(sender).lstrip("-").isdigit():
+                sender_conditions.append("m.sender_id=?")
+                values.append(int(sender))
+            else:
+                username = str(sender).lstrip("@")
+                if not re.fullmatch(r"[A-Za-z0-9_]+", username):
+                    raise ValueError("--sender must be a Telegram ID or username.")
+                sender_conditions.append("m.sender_id IN (SELECT entity_id FROM entities WHERE username=? COLLATE NOCASE)")
+                values.append(username)
+        if sender_conditions:
+            where.append("(" + " OR ".join(sender_conditions) + ")")
     if getattr(args, "direction", None):
         where.append("m.direction=?")
         values.append(args.direction)
@@ -434,6 +447,13 @@ def parser() -> argparse.ArgumentParser:
     show.add_argument("--chat", type=int, required=True)
     show.add_argument("--full", action="store_true")
     show.add_argument("--fields")
+    live = chat_commands.add_parser("open", help="Read group/channel history via API without joining")
+    live.add_argument("--peer", required=True)
+    live.add_argument("--sender", help="One sender ID or username (Telegram server-side filter)")
+    live.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
+    live.add_argument("--cursor")
+    live.add_argument("--max-text-chars", type=int, default=500)
+    live.set_defaults(full=False)
     comment = chat_commands.add_parser("comment")
     comment.add_argument("--chat", type=int, required=True)
     comment.add_argument("--text", required=True)
@@ -472,7 +492,8 @@ def parser() -> argparse.ArgumentParser:
     profile_show.add_argument("--peer", required=True)
     profile_show.add_argument("--refresh", action="store_true")
     profile_show.add_argument("--full", action="store_true")
-    profile_show.add_argument("--section", choices=["admins", "gifts", "permissions", "raw"])
+    profile_show.add_argument("--section", choices=["admins", "gifts", "common-groups", "personal-channel", "permissions", "raw"])
+    profile_show.add_argument("--cursor")
     profile_show.add_argument("--photo", action="store_true")
     profile_show.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     profile_show.add_argument("--fields")
@@ -527,7 +548,7 @@ def _chat_filters(parser: argparse.ArgumentParser) -> None:
 def _message_filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--chat", type=int, action="append")
     parser.add_argument("--personal", action="store_true")
-    parser.add_argument("--sender", type=int)
+    parser.add_argument("--sender", action="append", help="Sender ID or username; repeat for OR")
     parser.add_argument("--direction", choices=["incoming", "outgoing", "channel_post", "service"])
     parser.add_argument("--after")
     parser.add_argument("--before")
@@ -554,6 +575,14 @@ async def dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
             return envelope("account", [accounts.use(ROOT, args.id)])
         return envelope("account", [accounts.disconnect(ROOT, args.id)])
     if args.command == "chat":
+        if args.chat_command == "open":
+            if args.max_text_chars < 1:
+                raise ValueError("--max-text-chars must be positive.")
+            data = await open_chat(ROOT, args.peer, limit=limit(args.limit), cursor=args.cursor, sender=args.sender)
+            result = envelope("messages", [format_message(row, args) for row in data["rows"]],
+                              limit=args.limit, has_more=data["has_more"], next_cursor=data["next_cursor"])
+            result["meta"].update(source="telegram_api", chat=data["chat"])
+            return result
         if args.chat_command in {"list", "search"}:
             return chat_list(args)
         if args.chat_command == "show":
@@ -571,8 +600,9 @@ async def dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
         return envelope("photo", [await download_photo(ROOT, args.chat, args.message)])
     if args.command == "profile":
         fields = requested_fields(args.fields)
-        data = await profile(ROOT, args.peer, refresh=args.refresh, full=args.full, section=args.section, photo=args.photo, limit=limit(args.limit))
-        return envelope("profile", [select_fields(data, fields)], limit=args.limit, fields=fields)
+        data = await profile(ROOT, args.peer, refresh=args.refresh, full=args.full, section=args.section, photo=args.photo, limit=limit(args.limit), cursor=args.cursor)
+        pagination = data.pop("pagination", {})
+        return envelope("profile", [select_fields(data, fields)], limit=args.limit, fields=fields, **pagination)
     if args.command == "sync":
         if args.sync_command == "run":
             return envelope("sync", [await sync_index(ROOT, full=args.full)])

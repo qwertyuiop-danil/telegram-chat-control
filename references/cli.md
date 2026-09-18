@@ -47,7 +47,7 @@ uv run scripts/telegram.py service status
 
 `service install` создаёт пользовательский LaunchAgent на macOS, user-service systemd на Linux или Task Scheduler на Windows. Он синхронизирует только активный аккаунт.
 
-Если сеть требует прокси именно для MTProto, задай `TELEGRAM_CHAT_CONTROL_PROXY` как `http://HOST:PORT` или `socks5://HOST:PORT` в окружении сервиса. Обычные `HTTP_PROXY` и `HTTPS_PROXY` Telethon не использует автоматически.
+Если сеть требует прокси для MTProto, задай `TELEGRAM_CHAT_CONTROL_PROXY` как `http://HOST:PORT` или `socks5://HOST:PORT` в окружении сервиса. Если она не задана, клиент последовательно проверяет `HTTPS_PROXY`, затем `HTTP_PROXY`. Явная `TELEGRAM_CHAT_CONTROL_PROXY` всегда имеет приоритет.
 
 ## Подключение и отправка
 
@@ -59,3 +59,47 @@ uv run scripts/telegram.py send --chat CHAT_ID --text "Точный текст"
 ```
 
 При первом `account add` QR-код открывается системным браузером, а API ID/hash и облачный пароль запрашиваются интерактивно. Секреты сохраняются в системном keyring, либо в защищённом локальном файле при отсутствии keyring.
+
+## Исследование человека
+
+```bash
+uv run scripts/telegram.py profile show --peer @username --refresh --photo
+uv run scripts/telegram.py profile show --peer @username --section common-groups --limit 20
+uv run scripts/telegram.py profile show --peer @username --section common-groups --limit 20 --cursor RAW_CHAT_ID
+uv run scripts/telegram.py profile show --peer @username --section gifts --limit 20
+uv run scripts/telegram.py profile show --peer @username --section gifts --limit 20 --cursor NEXT_OFFSET
+```
+
+`profile.link` — публичная ссылка или Telegram deep link; `profile.about` — описание без обрезки; `profile.personal_channel` — прикреплённый канал. `--photo` скачивает текущую доступную аватарку в локальную папку аккаунта, возвращая `profile.photo_path` (null, если фото нет). Открой этот файл инструментом просмотра изображений.
+
+Секции `common-groups` и `gifts` читаются из API, не из кэша. Общие группы находятся в `items[0].common_groups`; подарки — в `items[0].gifts`. Обе секции используют `meta.has_more/next_cursor`; для полного списка повторяй запрос с теми же peer/section до конца. Не используй cursor сообщений для профилей. Лимит 1–200, по умолчанию 20; точная полная страница групп может потребовать завершающего пустого запроса.
+
+Подарки нормализованы: ID, название/ссылка коллекционного подарка (если есть), дата, даритель с именем и ссылкой, подпись `message`. `original_details` — отдельное первоначальное посвящение коллекционного подарка. Скрытый даритель не раскрывается; отсутствие дарителя или подписи не восстанавливается догадками. Запрашиваются только отображаемые в профиле подарки (`exclude_unsaved=True`). Если метод отсутствует в установленной Telethon или Telegram запрещает чтение, ответ явно содержит `*_unavailable`; остальные сведения и фото остаются доступны.
+
+API: [общие группы](https://core.telegram.org/method/messages.getCommonChats), [подарки](https://core.telegram.org/method/payments.getSavedStarGifts), [поля подарка](https://core.telegram.org/constructor/savedStarGift). Нормализованный `gifts` заменяет прежний сырой TL-объект.
+
+### Просмотр личного канала
+
+```bash
+uv run scripts/telegram.py profile show --peer @username --section personal-channel --limit 20
+uv run scripts/telegram.py profile show --peer @username --section personal-channel --limit 20 --cursor MESSAGE_ID
+```
+
+Возвращает `personal_channel` (ID, название, ссылка, описание, число участников) и `posts` — последние посты по убыванию ID. `meta.next_cursor` позволяет читать более ранние посты. У поста указаны чат, отправитель/подпись, направление, дата, ссылка, тип медиа и до 500 символов текста с `text_truncated`. Полный текст доступен в Telegram по ссылке либо через `message show --chat CHANNEL_ID --message MESSAGE_ID --full`, если пост уже в локальном индексе. Медиа здесь не скачивается. Если личный канал не прикреплён, возвращаются null и пустые posts; запрет чтения отмечается отдельно и не означает отсутствия канала.
+
+## Сообщения выбранных людей и приватные ссылки
+
+```bash
+uv run scripts/telegram.py message list --chat GROUP_ID --sender USER_ID --limit 20
+uv run scripts/telegram.py message list --chat GROUP_ID --sender @alice --sender USER_ID_2
+uv run scripts/telegram.py message search "встреча" --chat GROUP_ID --sender USER_ID
+uv run scripts/telegram.py chat open --peer "https://t.me/+INVITE_HASH" --limit 20
+uv run scripts/telegram.py chat open --peer "https://t.me/c/CHANNEL_ID/POST_ID" --limit 20
+uv run scripts/telegram.py chat open --peer GROUP_ID --sender @alice --limit 20
+```
+
+У `message list/search` повторяемые `--sender` объединяются через OR, а группа и остальные фильтры — через AND. ID стабилен; username сравнивается без учёта регистра с локальным `entities.username`. Непроиндексированный или устаревший username может дать пустой результат: уточни ID или используй API.
+
+`chat open` — чтение API без изменения членства и без записи истории в индекс. Принимает ID, username либо Telegram-ссылку; `--sender` здесь только один, фильтруется сервером Telegram. `meta.source=telegram_api`, `meta.chat` содержит профиль/описание чата, `items` — обычные нормализованные сообщения. `--limit` 1–200, `--cursor` — ID последнего сообщения предыдущей страницы; повторяй исходные peer/sender. `--max-text-chars` по умолчанию 500, можно увеличить для чтения полного текста. Не смешивай этот cursor с cursor локального `message list`.
+
+Invite проверяется только через [messages.checkChatInvite](https://core.telegram.org/method/messages.checkChatInvite). Разрешено чтение исключительно при `ChatInviteAlready`; `ChatInvitePeek` не подтверждает членство. `t.me/c` разрешается по текущим диалогам, даже если StringSession не сохранила access hash. Истёкшая/недействительная ссылка не доказывает, что аккаунт покинул канал; требуется независимо известный ID или точное совпадение диалога. Вступление и заявки запрещены, обхода через join/import нет. Invite-ссылки приватны: не публикуй их в отчётах без необходимости.

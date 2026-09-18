@@ -101,6 +101,21 @@ class TelegramStoreTests(unittest.TestCase):
         self.assertIsNone(result["meta"]["next_cursor"])
         self.assertIsNone(decode_cursor(None))
 
+    def test_multiple_senders_by_id_username_and_group(self) -> None:
+        with patch.object(cli, "ROOT", self.root):
+            args = cli.parser().parse_args(["message", "list", "--chat", "10", "--sender", "@ALICE", "--sender", "100", "--limit", "1"])
+            first = cli.message_list(args)
+            self.assertEqual(first["items"][0]["message_id"], 2)
+            args.cursor = first["meta"]["next_cursor"]
+            second = cli.message_list(args)
+            self.assertEqual(second["items"][0]["sender"]["id"], 200)
+            self.assertFalse(second["meta"]["has_more"])
+            args = cli.parser().parse_args(["message", "search", "hello", "--chat", "10", "--sender", "200", "--sender", "201"])
+            found = cli.message_list(args, search_query=args.query)
+            self.assertEqual([item["sender"]["id"] for item in found["items"]], [200])
+            args.sender = ["@unknown"]
+            self.assertEqual(cli.message_list(args)["items"], [])
+
     def test_full_text_search_returns_deleted_messages_by_default(self) -> None:
         with self.store.connect() as db:
             Store.mark_deleted(db, 10, 1, "event")
@@ -194,15 +209,6 @@ class PlatformTests(unittest.TestCase):
         self.assertIn("Restart=always", unit)
         self.assertIn("service run", unit)
 
-    def test_launchd_preserves_explicit_keyring_backend(self) -> None:
-        with patch.dict(os.environ, {"PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}):
-            plist = launchd_plist()
-        self.assertIn("EnvironmentVariables", plist)
-        self.assertIn("keyring.backends.fail.Keyring", plist)
-        self.assertIn("WorkingDirectory", plist)
-        self.assertIn("PYTHONPATH", plist)
-        self.assertIn("-S", plist)
-
     def test_private_file_credential_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             credentials = Credentials(Path(directory))
@@ -212,20 +218,6 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(credentials.get("test"), "secret")
             if os.name != "nt":
                 self.assertEqual(oct(credentials.path.stat().st_mode & 0o777), "0o600")
-
-    def test_empty_keyring_falls_back_to_imported_private_file(self) -> None:
-        class EmptyKeyring:
-            @staticmethod
-            def get_password(service: str, key: str) -> None:
-                return None
-
-        with tempfile.TemporaryDirectory() as directory:
-            credentials = Credentials(Path(directory))
-            credentials._keyring_checked = True
-            credentials._keyring = None
-            credentials.put("test", "secret")
-            credentials._keyring = EmptyKeyring()
-            self.assertEqual(credentials.get("test"), "secret")
 
 
 if __name__ == "__main__":

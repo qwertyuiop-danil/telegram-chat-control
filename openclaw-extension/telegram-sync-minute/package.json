@@ -1,0 +1,9 @@
+{
+  "name": "@local/telegram-sync-minute",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

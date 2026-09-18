@@ -1,0 +1,13 @@
+{
+  "id": "telegram-sync-minute",
+  "name": "Telegram Sync Minute",
+  "description": "Updates the local Telegram index once per minute without an agent.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

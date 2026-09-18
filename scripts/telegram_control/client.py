@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, AsyncIterator
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 import webbrowser
 
 from filelock import FileLock, Timeout
@@ -55,7 +55,7 @@ def store(root: Path, account_id: str | None = None) -> Store:
 
 def telegram_proxy() -> dict[str, Any] | None:
     """Return explicit Telethon proxy settings, if configured by the host."""
-    raw = os.environ.get("TELEGRAM_CHAT_CONTROL_PROXY")
+    raw = os.environ.get("TELEGRAM_CHAT_CONTROL_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
     if not raw:
         return None
     parsed = urlparse(raw if "://" in raw else f"http://{raw}")
@@ -185,8 +185,76 @@ def message_row(peer_id: int, message: Any, owner_id: int, sender: Any | None = 
 
 
 async def resolve(current: Any, peer: str | int) -> Any:
-    value = int(peer) if str(peer).lstrip("-").isdigit() else peer
-    return await current.get_entity(value)
+    value = str(peer).strip()
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    invite = None
+    channel_id = None
+    if parsed.scheme == "tg" and parsed.netloc == "join":
+        invite = parse_qs(parsed.query).get("invite", [""])[0]
+    elif parsed.scheme in {"http", "https"} and parsed.hostname in {"t.me", "telegram.me", "telegram.dog", "www.t.me"}:
+        parts = parsed.path.strip("/").split("/")
+        if parts[0].startswith("+"):
+            invite = parts[0][1:]
+        elif parts[0] == "joinchat":
+            invite = parts[1] if len(parts) > 1 else ""
+        elif parts[0] == "c":
+            if len(parts) < 2 or not parts[1].isdigit() or int(parts[1]) <= 0:
+                raise ValueError("Invalid private-channel link.")
+            channel_id = int(parts[1])
+    if invite is not None:
+        if not invite:
+            raise ValueError("Empty Telegram invite link.")
+        checked = await current(functions.messages.CheckChatInviteRequest(invite))
+        if not isinstance(checked, types.ChatInviteAlready):
+            raise RuntimeError("Account is not a member. Joining and join requests are forbidden.")
+        return checked.chat
+    if channel_id is not None:
+        # Resolve from current dialogs, not StringSession's often-empty entity cache.
+        async for dialog in current.iter_dialogs():
+            entity = dialog.entity
+            if isinstance(entity, types.Channel) and entity.id == channel_id and not entity.left:
+                return entity
+        raise RuntimeError("Private channel is not in this account's dialogs. No join request was sent.")
+    value = int(value) if value.lstrip("-").isdigit() else value
+    try:
+        return await current.get_entity(value)
+    except ValueError:
+        if isinstance(value, int):
+            async for dialog in current.iter_dialogs():
+                if utils.get_peer_id(dialog.entity) == value:
+                    return dialog.entity
+        raise
+
+
+async def open_chat(root: Path, peer: str, *, limit: int = 20, cursor: str | None = None, sender: str | None = None) -> dict[str, Any]:
+    offset = int(cursor or 0)
+    if offset < 0 or not 1 <= limit <= 200:
+        raise ValueError("Cursor must be nonnegative; limit must be between 1 and 200.")
+    async with telegram_client(root) as current:
+        await assert_owner(root, current)
+        entity = await resolve(current, peer)
+        if not isinstance(entity, (types.Chat, types.Channel)):
+            raise ValueError("chat open requires a group or channel.")
+        if getattr(entity, "left", False) or getattr(entity, "kicked", False):
+            raise RuntimeError("Account is not a member. Joining and join requests are forbidden.")
+        summary = _profile_summary(entity)
+        # Metadata failure should not hide otherwise accessible history.
+        try:
+            request = functions.channels.GetFullChannelRequest(entity) if isinstance(entity, types.Channel) else functions.messages.GetFullChatRequest(entity.id)
+            detailed = await current(request)
+            summary["about"] = getattr(detailed.full_chat, "about", None)
+        except RPCError as error:
+            summary["details_unavailable"] = type(error).__name__
+        from_user = await resolve(current, sender) if sender is not None else None
+        rows = []
+        async for message in current.iter_messages(entity, limit=limit + 1, offset_id=offset, from_user=from_user):
+            row = message_row(summary["id"], message, int(active_account(root)["id"]))
+            row.update(chat_title=summary["title"], chat_kind=summary["kind"], chat_username=summary["username"])
+            rows.append(row)
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        return {"chat": summary, "rows": rows, "has_more": has_more,
+                "next_cursor": str(rows[-1]["message_id"]) if has_more else None}
 
 
 async def _ingest_message(root: Path, db: Any, peer_id: int, message: Any, owner_id: int, sender: Any | None = None) -> None:
@@ -393,23 +461,132 @@ async def download_photo(root: Path, peer: int, message_id: int) -> dict[str, An
     return {"path": str(path), "chat_id": peer, "message_id": message_id}
 
 
+def _profile_link(entity: Any) -> str | None:
+    username = getattr(entity, "username", None) or next(
+        (item.username for item in (getattr(entity, "usernames", None) or []) if item.active), None)
+    if username:
+        return f"https://t.me/{username}"
+    if isinstance(entity, (types.User, types.PeerUser)):
+        return f"tg://user?id={utils.get_peer_id(entity)}"
+    return None
+
+
+def _gift_sender(peer: Any, entities: dict[int, Any]) -> dict[str, Any] | None:
+    if peer is None:
+        return None
+    peer_id = utils.get_peer_id(peer)
+    entity = entities.get(peer_id, peer)
+    return {"id": peer_id, "name": utils.get_display_name(entity) or None,
+            "username": getattr(entity, "username", None), "link": _profile_link(entity)}
+
+
+def _saved_gift(saved: Any, entities: dict[int, Any]) -> dict[str, Any]:
+    gift = saved.gift
+    hidden = bool(getattr(saved, "name_hidden", False))
+    slug = getattr(gift, "slug", None)
+    result = {
+        "id": gift.id, "saved_id": getattr(saved, "saved_id", None),
+        "title": getattr(gift, "title", None), "slug": slug,
+        "link": f"https://t.me/nft/{slug}" if slug else None,
+        "date": dump(saved.date), "sender_hidden": hidden,
+        "sender": None if hidden else _gift_sender(getattr(saved, "from_id", None), entities),
+        "message": getattr(getattr(saved, "message", None), "text", None),
+    }
+    # Collectibles may retain an original dedication, distinct from the latest sender.
+    for attribute in getattr(gift, "attributes", []) or []:
+        if type(attribute).__name__ == "StarGiftAttributeOriginalDetails":
+            result["original_details"] = {
+                "sender": None if hidden else _gift_sender(getattr(attribute, "sender_id", None), entities),
+                "date": dump(attribute.date),
+                "message": getattr(getattr(attribute, "message", None), "text", None),
+            }
+    return result
+
+
+async def _personal_channel(current: Any, detailed: Any, limit: int, cursor: str | None) -> dict[str, Any]:
+    if detailed is None or not hasattr(detailed, "full_user"):
+        return {"personal_channel_unavailable": "User profile details unavailable."}
+    channel_id = getattr(detailed.full_user, "personal_channel_id", None)
+    if not channel_id:
+        return {"personal_channel": None, "posts": []}
+    offset_id = int(cursor or 0)
+    if offset_id < 0:
+        raise ValueError("Personal-channel cursor must be a nonnegative message ID.")
+    channel = next((chat for chat in detailed.chats if chat.id == channel_id), None)
+    if channel is None:
+        channel = await current.get_entity(types.PeerChannel(channel_id))
+    full_channel = await current(functions.channels.GetFullChannelRequest(channel))
+    summary = _profile_summary(channel)
+    summary["about"] = getattr(full_channel.full_chat, "about", None)
+    summary["member_count"] = getattr(full_channel.full_chat, "participants_count", summary["member_count"])
+    posts = []
+    async for message in current.iter_messages(channel, limit=limit, offset_id=offset_id):
+        body = message.message or ""
+        posts.append({
+            "chat": {"chat_id": summary["id"], "title": summary["title"], "type": "channel"},
+            "message_id": message.id, "sent_at": dump(message.date),
+            "sender": {"id": message.sender_id, "signature": getattr(message, "post_author", None)},
+            "direction": "service" if getattr(message, "action", None) else "channel_post",
+            "text": body[:500], "text_truncated": len(body) > 500,
+            "media": {"kind": media_kind(message)} if getattr(message, "media", None) else None,
+            "link": f"{summary['link']}/{message.id}" if summary["link"] else None,
+        })
+    next_cursor = str(posts[-1]["message_id"]) if len(posts) == limit else None
+    if next_cursor and next_cursor == cursor:
+        raise RuntimeError("Telegram personal-channel cursor did not advance.")
+    return {"personal_channel": summary, "posts": posts,
+            "pagination": {"has_more": bool(next_cursor), "next_cursor": next_cursor}}
+
+
+async def _profile_section(current: Any, entity: Any, section: str, limit: int, cursor: str | None) -> dict[str, Any]:
+    if not isinstance(entity, types.User):
+        return {section.replace("-", "_"): None, "details_unavailable": "This section requires a user account."}
+    if section == "common-groups":
+        max_id = int(cursor or 0)
+        if max_id < 0:
+            raise ValueError("Common-group cursor must be a nonnegative raw chat ID.")
+        result = await current(functions.messages.GetCommonChatsRequest(entity, max_id, limit))
+        chats = result.chats
+        # An exact-sized final page may require one final empty request.
+        next_cursor = str(chats[-1].id) if len(chats) == limit else None
+        if next_cursor and next_cursor == cursor:
+            raise RuntimeError("Telegram common-group cursor did not advance.")
+        return {"common_groups": [_profile_summary(chat) for chat in chats],
+                "pagination": {"has_more": bool(next_cursor), "next_cursor": next_cursor}}
+    request = getattr(functions.payments, "GetSavedStarGiftsRequest", None)
+    if request is None:
+        return {"gifts": None, "details_unavailable": "Installed Telethon does not support saved profile gifts."}
+    result = await current(request(peer=entity, offset=cursor or "", limit=limit, exclude_unsaved=True))
+    entities = {utils.get_peer_id(item): item for item in [*result.users, *result.chats]}
+    next_cursor = getattr(result, "next_offset", None) or None
+    if next_cursor and next_cursor == cursor:
+        raise RuntimeError("Telegram gift cursor did not advance.")
+    return {"gifts": [_saved_gift(item, entities) for item in result.gifts], "gifts_count": result.count,
+            "pagination": {"has_more": bool(next_cursor), "next_cursor": next_cursor}}
+
+
 def _profile_summary(entity: Any) -> dict[str, Any]:
     kind, _private, bot = classification(entity)
     return {
         "id": utils.get_peer_id(entity), "kind": kind, "title": utils.get_display_name(entity) or str(utils.get_peer_id(entity)),
-        "username": getattr(entity, "username", None), "bot": bot, "verified": bool(getattr(entity, "verified", False)),
+        "username": getattr(entity, "username", None), "link": _profile_link(entity), "bot": bot, "verified": bool(getattr(entity, "verified", False)),
         "premium": bool(getattr(entity, "premium", False)), "scam": bool(getattr(entity, "scam", False)),
         "fake": bool(getattr(entity, "fake", False)), "member_count": getattr(entity, "participants_count", None),
     }
 
 
-async def profile(root: Path, peer: str | int, *, refresh: bool = False, full: bool = False, section: str | None = None, photo: bool = False, limit: int = 20) -> dict[str, Any]:
+async def profile(root: Path, peer: str | int, *, refresh: bool = False, full: bool = False, section: str | None = None, photo: bool = False, limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
+    if cursor is not None and section not in {"gifts", "common-groups", "personal-channel"}:
+        raise ValueError("--cursor requires --section gifts, common-groups or personal-channel.")
+    if not 1 <= limit <= 200:
+        raise ValueError("--limit must be between 1 and 200.")
     key = str(peer)
     with store(root).connect(write=False) as db:
         cached = db.execute("SELECT data_json,updated_at FROM profiles WHERE peer_key=?", (key,)).fetchone()
     if cached and not refresh and not full and not section and not photo and datetime.fromisoformat(cached["updated_at"]) > datetime.now(timezone.utc) - timedelta(hours=24):
         data = json.loads(cached["data_json"])
-        return {"source": "cache", **data}
+        if "link" in data.get("profile", {}) and "about" in data["profile"]:
+            return {"source": "cache", **data}
     async with telegram_client(root) as current:
         entity = await resolve(current, peer)
         data: dict[str, Any] = {"profile": _profile_summary(entity)}
@@ -420,8 +597,11 @@ async def profile(root: Path, peer: str | int, *, refresh: bool = False, full: b
                 full_user = getattr(detailed, "full_user", None)
                 data["profile"]["about"] = getattr(full_user, "about", None)
                 data["profile"]["phone"] = getattr(entity, "phone", None)
-                if section == "gifts":
-                    data["gifts"] = dump(await current(functions.payments.GetSavedStarGiftsRequest(entity, "", limit)))
+                data["profile"]["common_chats_count"] = getattr(full_user, "common_chats_count", None)
+                channel_id = getattr(full_user, "personal_channel_id", None)
+                channel = next((chat for chat in getattr(detailed, "chats", []) if chat.id == channel_id), None)
+                data["profile"]["personal_channel"] = _profile_summary(channel) if channel else (
+                    {"id": utils.get_peer_id(types.PeerChannel(channel_id)), "link": None} if channel_id else None)
             elif isinstance(entity, types.Channel):
                 detailed = await current(functions.channels.GetFullChannelRequest(entity))
                 full_chat = getattr(detailed, "full_chat", None)
@@ -432,18 +612,31 @@ async def profile(root: Path, peer: str | int, *, refresh: bool = False, full: b
                     async for participant in current.iter_participants(entity, filter=types.ChannelParticipantsAdmins, limit=limit):
                         admins.append(_profile_summary(participant))
                     data["admins"] = admins
-            if photo:
-                folder = root / "data" / "accounts" / active_account(root)["id"] / "profile-photos"
-                folder.mkdir(parents=True, exist_ok=True)
-                data["profile"]["photo_path"] = await current.download_profile_photo(entity, file=folder / str(data["profile"]["id"]))
             if full or section in {"permissions", "raw"}:
                 data["details"] = dump(detailed) if detailed else dump(entity)
             if section == "raw":
                 data["raw"] = dump(entity)
         except RPCError as error:
             data["details_unavailable"] = type(error).__name__
+        if section == "personal-channel":
+            try:
+                data.update(await _personal_channel(current, detailed, limit, cursor))
+            except (RPCError, ValueError) as error:
+                data["personal_channel_unavailable"] = type(error).__name__
+        if section in {"common-groups", "gifts"}:
+            try:
+                data.update(await _profile_section(current, entity, section, limit, cursor))
+            except RPCError as error:
+                data[f"{section.replace('-', '_')}_unavailable"] = type(error).__name__
+        try:
+            if photo:
+                folder = root / "data" / "accounts" / active_account(root)["id"] / "profile-photos"
+                folder.mkdir(parents=True, exist_ok=True)
+                data["profile"]["photo_path"] = await current.download_profile_photo(entity, file=folder / str(data["profile"]["id"]))
+        except RPCError as error:
+            data["photo_unavailable"] = type(error).__name__
     with store(root).connect() as db:
-        db.execute("INSERT INTO profiles(peer_key,data_json,updated_at) VALUES(?,?,?) ON CONFLICT(peer_key) DO UPDATE SET data_json=excluded.data_json,updated_at=excluded.updated_at", (key, json.dumps(data, ensure_ascii=False), now()))
+        db.execute("INSERT INTO profiles(peer_key,data_json,updated_at) VALUES(?,?,?) ON CONFLICT(peer_key) DO UPDATE SET data_json=excluded.data_json,updated_at=excluded.updated_at", (key, json.dumps({"profile": data["profile"]}, ensure_ascii=False), now()))
     return {"source": "telegram_api", **data}
 
 
